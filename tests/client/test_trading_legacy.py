@@ -115,6 +115,45 @@ class TestTradingMixin:
         trading_client._ensure_authenticated.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_search_open_positions_preserves_display_name_and_ignores_unknown_fields(
+        self, trading_client
+    ):
+        """Test position search keeps known display fields and ignores unknown ones."""
+        trading_client.account_info = Account(
+            id=12345,
+            name="Test Account",
+            balance=10000.0,
+            canTrade=True,
+            isVisible=True,
+            simulated=False,
+        )
+
+        mock_response = {
+            "success": True,
+            "positions": [
+                {
+                    "id": "pos1",
+                    "accountId": 12345,
+                    "contractId": "CON.F.US.MNQ.Z25",
+                    "contractDisplayName": "MNQZ25",
+                    "unknownGatewayField": "ignored",
+                    "creationTimestamp": datetime.datetime.now(pytz.UTC).isoformat(),
+                    "size": 2,
+                    "averagePrice": 21342.25,
+                    "type": 1,
+                },
+            ],
+        }
+        trading_client._make_request.return_value = mock_response
+
+        positions = await trading_client.search_open_positions()
+
+        assert len(positions) == 1
+        assert positions[0].contractId == "CON.F.US.MNQ.Z25"
+        assert positions[0].contractDisplayName == "MNQZ25"
+        assert positions[0].size == 2
+
+    @pytest.mark.asyncio
     async def test_search_open_positions_with_account_id(self, trading_client):
         """Test position search with specific account ID."""
         # No account_info set, but provide explicit account_id
@@ -278,34 +317,34 @@ class TestTradingMixin:
         mock_response = {
             "success": True,
             "trades": [
-            {
-                "id": 1,
-                "accountId": 12345,
-                "contractId": "ES",
-                "creationTimestamp": datetime.datetime.now(pytz.UTC).isoformat(),
-                "price": 4500.0,
-                "profitAndLoss": 50.0,
-                "fees": 2.50,
-                "side": 0,  # Buy
-                "size": 2,
-                "voided": False,
-                "orderId": 100,
-            },
-            {
-                "id": 2,
-                "accountId": 12345,
-                "contractId": "NQ",
-                "creationTimestamp": (
-                    datetime.datetime.now(pytz.UTC) - timedelta(hours=1)
-                ).isoformat(),
-                "price": 15000.0,
-                "profitAndLoss": None,  # Half-turn trade
-                "fees": 2.25,
-                "side": 1,  # Sell
-                "size": 1,
-                "voided": False,
-                "orderId": 101,
-            },
+                {
+                    "id": 1,
+                    "accountId": 12345,
+                    "contractId": "ES",
+                    "creationTimestamp": datetime.datetime.now(pytz.UTC).isoformat(),
+                    "price": 4500.0,
+                    "profitAndLoss": 50.0,
+                    "fees": 2.50,
+                    "side": 0,  # Buy
+                    "size": 2,
+                    "voided": False,
+                    "orderId": 100,
+                },
+                {
+                    "id": 2,
+                    "accountId": 12345,
+                    "contractId": "NQ",
+                    "creationTimestamp": (
+                        datetime.datetime.now(pytz.UTC) - timedelta(hours=1)
+                    ).isoformat(),
+                    "price": 15000.0,
+                    "profitAndLoss": None,  # Half-turn trade
+                    "fees": 2.25,
+                    "side": 1,  # Sell
+                    "size": 1,
+                    "voided": False,
+                    "orderId": 101,
+                },
             ],
         }
         trading_client._make_request.return_value = mock_response
@@ -371,19 +410,19 @@ class TestTradingMixin:
         mock_response = {
             "success": True,
             "trades": [
-            {
-                "id": 1,
-                "accountId": 12345,
-                "contractId": "MNQ",
-                "creationTimestamp": datetime.datetime.now(pytz.UTC).isoformat(),
-                "price": 15000.0,
-                "profitAndLoss": 75.0,
-                "fees": 2.25,
-                "side": 0,  # Buy
-                "size": 3,
-                "voided": False,
-                "orderId": 102,
-            }
+                {
+                    "id": 1,
+                    "accountId": 12345,
+                    "contractId": "MNQ",
+                    "creationTimestamp": datetime.datetime.now(pytz.UTC).isoformat(),
+                    "price": 15000.0,
+                    "profitAndLoss": 75.0,
+                    "fees": 2.25,
+                    "side": 0,  # Buy
+                    "size": 3,
+                    "voided": False,
+                    "orderId": 102,
+                }
             ],
         }
         trading_client._make_request.return_value = mock_response
