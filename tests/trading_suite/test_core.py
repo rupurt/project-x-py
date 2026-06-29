@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from project_x_py import Features, TradingSuite, TradingSuiteConfig
+from project_x_py.exceptions import ProjectXConnectionError
 from project_x_py.models import Account
 
 
@@ -204,6 +205,48 @@ async def test_trading_suite_create_requires_direct_credentials_together():
 
     with pytest.raises(ValueError, match="Both 'username' and 'api_key'"):
         await TradingSuite.create("MNQ", username="direct_user")
+
+
+@pytest.mark.asyncio
+async def test_trading_suite_create_fails_when_realtime_connect_returns_false():
+    """Test creation fails when realtime connections do not establish."""
+
+    mock_client = _mock_authenticated_client()
+
+    mock_context = AsyncMock()
+    mock_context.__aenter__.return_value = mock_client
+    mock_context.__aexit__.return_value = None
+
+    mock_realtime = MagicMock()
+    mock_realtime.connect = AsyncMock(return_value=False)
+    mock_realtime.disconnect = AsyncMock(return_value=None)
+
+    mock_data_manager = MagicMock()
+    mock_data_manager.stop_realtime_feed = AsyncMock(return_value=None)
+    mock_data_manager.cleanup = AsyncMock(return_value=None)
+
+    mock_position_manager = MagicMock()
+
+    with patch(
+        "project_x_py.trading_suite.ProjectX.from_env", return_value=mock_context
+    ):
+        with patch(
+            "project_x_py.trading_suite.ProjectXRealtimeClient",
+            return_value=mock_realtime,
+        ):
+            with patch(
+                "project_x_py.trading_suite.RealtimeDataManager",
+                return_value=mock_data_manager,
+            ):
+                with patch(
+                    "project_x_py.trading_suite.PositionManager",
+                    return_value=mock_position_manager,
+                ):
+                    with pytest.raises(ProjectXConnectionError):
+                        await TradingSuite.create("MNQ")
+
+    mock_realtime.disconnect.assert_awaited_once()
+    assert mock_context.__aexit__.await_count >= 1
 
 
 @pytest.mark.asyncio
