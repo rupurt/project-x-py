@@ -354,6 +354,70 @@ class TestMarketDepthProcessing:
         assert mock_orderbook_base.orderbook_asks.height == 0
 
     @pytest.mark.asyncio
+    async def test_depth_bid_update_prunes_crossed_stale_asks(
+        self, realtime_handler, mock_orderbook_base
+    ):
+        """Test that a fresh bid update removes stale asks it crosses."""
+        timestamp = datetime.now(UTC)
+        mock_orderbook_base.orderbook_asks = pl.DataFrame(
+            {
+                "price": [21000.5, 21001.0],
+                "volume": [3, 4],
+                "timestamp": [timestamp, timestamp],
+            }
+        )
+        depth_data = {
+            "contract_id": "CON.F.US.MNQ.U25",
+            "data": [
+                {
+                    "contractId": "CON.F.US.MNQ.U25",
+                    "type": DomType.BID.value,
+                    "price": 21000.75,
+                    "size": 10,
+                    "side": "Bid",
+                    "timestamp": timestamp.isoformat(),
+                }
+            ],
+        }
+
+        await realtime_handler._on_market_depth_update(depth_data)
+
+        assert mock_orderbook_base.orderbook_bids["price"].to_list() == [21000.75]
+        assert mock_orderbook_base.orderbook_asks["price"].to_list() == [21001.0]
+
+    @pytest.mark.asyncio
+    async def test_depth_ask_update_prunes_crossed_stale_bids(
+        self, realtime_handler, mock_orderbook_base
+    ):
+        """Test that a fresh ask update removes stale bids it crosses."""
+        timestamp = datetime.now(UTC)
+        mock_orderbook_base.orderbook_bids = pl.DataFrame(
+            {
+                "price": [21000.0, 21000.5],
+                "volume": [3, 4],
+                "timestamp": [timestamp, timestamp],
+            }
+        )
+        depth_data = {
+            "contract_id": "CON.F.US.MNQ.U25",
+            "data": [
+                {
+                    "contractId": "CON.F.US.MNQ.U25",
+                    "type": DomType.ASK.value,
+                    "price": 21000.25,
+                    "size": 10,
+                    "side": "Ask",
+                    "timestamp": timestamp.isoformat(),
+                }
+            ],
+        }
+
+        await realtime_handler._on_market_depth_update(depth_data)
+
+        assert mock_orderbook_base.orderbook_bids["price"].to_list() == [21000.0]
+        assert mock_orderbook_base.orderbook_asks["price"].to_list() == [21000.25]
+
+    @pytest.mark.asyncio
     async def test_process_market_depth_remove(
         self, realtime_handler, mock_orderbook_base
     ):

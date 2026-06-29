@@ -350,19 +350,11 @@ class OptimizedRealtimeHandler:
 
     async def _process_depth_batch(self, batch: list[dict[str, Any]]) -> None:
         """Process a batch of depth messages."""
-        # Group depth updates by contract
-        depth_by_contract: dict[str, list[dict[str, Any]]] = {}
+        # Depth messages are incremental deltas, not replaceable snapshots.
+        # Preserve every update in queue order or the book can retain stale levels.
         for depth in batch:
-            contract = depth.get("contract_id", "unknown")
-            if contract not in depth_by_contract:
-                depth_by_contract[contract] = []
-            depth_by_contract[contract].append(depth)
-
-        # Use only latest depth update per contract
-        for _contract, depths in depth_by_contract.items():
-            latest_depth = depths[-1]
             if hasattr(self.client, "_forward_market_depth"):
-                await self.client._forward_market_depth(latest_depth)
+                await self.client._forward_market_depth(depth)
 
     def get_all_stats(self) -> dict[str, Any]:
         """Get statistics from all batch handlers."""

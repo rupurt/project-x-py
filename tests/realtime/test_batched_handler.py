@@ -290,8 +290,16 @@ class TestOptimizedRealtimeHandler:
         # Wait for batch processing
         await asyncio.sleep(0.2)
 
-        # Only latest depth per contract should be forwarded
-        assert len(client.depth_received) <= 6
+        # Depth updates are deltas, so batching must preserve each message.
+        assert len(client.depth_received) == 6
+        assert [depth["bids"][0][0] for depth in client.depth_received] == [
+            15000,
+            14999,
+            14998,
+            14997,
+            14996,
+            14995,
+        ]
 
     @pytest.mark.asyncio
     async def test_get_all_stats(self):

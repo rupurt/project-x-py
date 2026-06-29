@@ -549,6 +549,8 @@ class RealtimeHandler:
                 await self._update_orderbook_level(
                     price, volume, current_time, is_bid=side_is_bid
                 )
+                if volume > 0:
+                    self._remove_crossed_opposite_levels(price, is_bid=side_is_bid)
             elif trade_type == DomType.RESET:
                 # Reset orderbook
                 await self._reset_orderbook()
@@ -796,6 +798,20 @@ class RealtimeHandler:
             self.orderbook.orderbook_bids = orderbook_df
         else:
             self.orderbook.orderbook_asks = orderbook_df
+
+    def _remove_crossed_opposite_levels(self, price: float, *, is_bid: bool) -> None:
+        """Remove stale opposite-side levels crossed by a fresh depth update."""
+        if is_bid:
+            if self.orderbook.orderbook_asks.height > 0:
+                self.orderbook.orderbook_asks = self.orderbook.orderbook_asks.filter(
+                    pl.col("price") > price
+                )
+            return
+
+        if self.orderbook.orderbook_bids.height > 0:
+            self.orderbook.orderbook_bids = self.orderbook.orderbook_bids.filter(
+                pl.col("price") < price
+            )
 
     async def _reset_orderbook(self) -> None:
         """
