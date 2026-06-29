@@ -196,7 +196,7 @@ class RealtimeHandler:
 
             self.logger.debug(f"Market depth callback received: {list(data.keys())}")
             # The data comes structured as {"contract_id": ..., "data": ...}
-            contract_id = data.get("contract_id", "")
+            contract_id = self._extract_contract_id(data, is_quote=False)
             if isinstance(data.get("data"), list) and len(data.get("data", [])) > 0:
                 self.logger.debug(f"First data entry: {data['data'][0]}")
             if not self._is_relevant_contract(contract_id):
@@ -242,13 +242,36 @@ class RealtimeHandler:
                 self.logger.debug("Ignoring malformed quote update")
                 return
 
-            # The data comes structured as {"contract_id": ..., "data": ...}
-            contract_id = data.get("contract_id", "")
+            # The data usually comes structured as {"contract_id": ..., "data": ...},
+            # but a few call sites/tests pass the raw quote payload directly.
+            contract_id = self._extract_contract_id(data, is_quote=True)
             if not self._is_relevant_contract(contract_id):
                 return
 
             # Extract quote data
             quote_data = data.get("data", {})
+            if not isinstance(quote_data, dict):
+                quote_data = {}
+            if not quote_data:
+                quote_data = data
+
+            best_bid = self._coerce_optional_float(
+                quote_data.get("bestBid", quote_data.get("bid"))
+            )
+            best_ask = self._coerce_optional_float(
+                quote_data.get("bestAsk", quote_data.get("ask"))
+            )
+            bid_size = self._coerce_optional_int(
+                quote_data.get("bidSize", quote_data.get("bestBidSize"))
+            )
+            ask_size = self._coerce_optional_int(
+                quote_data.get("askSize", quote_data.get("bestAskSize"))
+            )
+            current_time = datetime.now(self.orderbook.timezone)
+
+            await self._apply_quote_to_orderbook(
+                best_bid, best_ask, bid_size, ask_size, current_time
+            )
 
             # Trigger quote update callbacks
             # Gateway uses 'bestBid'/'bestAsk' not 'bid'/'ask'
@@ -256,11 +279,11 @@ class RealtimeHandler:
                 "quote_update",
                 {
                     "contract_id": contract_id,
-                    "bid": quote_data.get("bestBid"),
-                    "ask": quote_data.get("bestAsk"),
-                    "bid_size": quote_data.get("bidSize"),
-                    "ask_size": quote_data.get("askSize"),
-                    "timestamp": datetime.now(self.orderbook.timezone),
+                    "bid": best_bid,
+                    "ask": best_ask,
+                    "bid_size": bid_size,
+                    "ask_size": ask_size,
+                    "timestamp": current_time,
                 },
             )
 
@@ -307,13 +330,96 @@ class RealtimeHandler:
             "."
         )[0]
 
-        is_match = clean_contract == clean_instrument
+        is_match = self._contract_roots_equivalent(clean_contract, clean_instrument)
         if not is_match:
             self.logger.debug(
                 f"Contract mismatch: received '{contract_id}' (clean: '{clean_contract}'), "
                 f"expected '{self.orderbook.instrument}' (clean: '{clean_instrument}')"
             )
         return is_match
+
+    def _extract_contract_id(self, data: dict[str, Any], *, is_quote: bool) -> str:
+        """Extract contract ids from structured callback data or raw Gateway payloads."""
+        contract_id = data.get("contract_id")
+        if isinstance(contract_id, str) and contract_id:
+            return contract_id
+
+        payload = data.get("data")
+        if isinstance(payload, dict):
+            contract_id = payload.get("contractId") or payload.get("symbolId")
+            if is_quote:
+                contract_id = contract_id or payload.get("symbol")
+            if isinstance(contract_id, str) and contract_id:
+                return contract_id
+
+        contract_id = data.get("contractId") or data.get("symbolId")
+        if is_quote:
+            contract_id = contract_id or data.get("symbol")
+        return contract_id if isinstance(contract_id, str) else ""
+
+    def _contract_roots_equivalent(self, left: str, right: str) -> bool:
+        """Compare ProjectX contract roots, including known display/root aliases."""
+        if left == right:
+            return True
+
+        aliases = {
+            "MCL": {"MCLE"},
+            "MCLE": {"MCL"},
+        }
+        return right in aliases.get(left, set()) or left in aliases.get(right, set())
+
+    @staticmethod
+    def _coerce_optional_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _coerce_optional_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    async def _apply_quote_to_orderbook(
+        self,
+        best_bid: float | None,
+        best_ask: float | None,
+        bid_size: int | None,
+        ask_size: int | None,
+        timestamp: datetime,
+    ) -> None:
+        """Use quote top-of-book data to keep the depth book from crossing."""
+        if best_bid is None and best_ask is None:
+            return
+
+        async with self.orderbook.orderbook_lock:
+            if best_bid is not None:
+                if self.orderbook.orderbook_bids.height > 0:
+                    self.orderbook.orderbook_bids = (
+                        self.orderbook.orderbook_bids.filter(
+                            pl.col("price") <= best_bid
+                        )
+                    )
+                await self._update_orderbook_level(
+                    best_bid, bid_size if bid_size is not None else 1, timestamp, True
+                )
+
+            if best_ask is not None:
+                if self.orderbook.orderbook_asks.height > 0:
+                    self.orderbook.orderbook_asks = (
+                        self.orderbook.orderbook_asks.filter(
+                            pl.col("price") >= best_ask
+                        )
+                    )
+                await self._update_orderbook_level(
+                    best_ask, ask_size if ask_size is not None else 1, timestamp, False
+                )
 
     async def _process_market_depth(self, data: dict[str, Any]) -> None:
         """
@@ -421,11 +527,12 @@ class RealtimeHandler:
         try:
             trade_type = entry.get("type", 0)
             price = float(entry.get("price", 0))
-            volume = int(entry.get("volume", 0))
+            volume = int(entry.get("volume", entry.get("size", 0)))
 
             # Map type and update statistics
             type_name = self.orderbook._map_trade_type(trade_type)
             self.orderbook.order_type_stats[f"type_{trade_type}_count"] += 1
+            side_is_bid = self._depth_entry_is_bid(entry, trade_type)
 
             # Handle different trade types
             if trade_type == DomType.TRADE:
@@ -438,25 +545,9 @@ class RealtimeHandler:
                     pre_update_ask,
                     type_name,
                 )
-            elif trade_type == DomType.BID:
-                # Update bid side
+            elif side_is_bid is not None:
                 await self._update_orderbook_level(
-                    price, volume, current_time, is_bid=True
-                )
-            elif trade_type == DomType.ASK:
-                # Update ask side
-                await self._update_orderbook_level(
-                    price, volume, current_time, is_bid=False
-                )
-            elif trade_type in (DomType.BEST_BID, DomType.NEW_BEST_BID):
-                # New best bid
-                await self._update_orderbook_level(
-                    price, volume, current_time, is_bid=True
-                )
-            elif trade_type in (DomType.BEST_ASK, DomType.NEW_BEST_ASK):
-                # New best ask
-                await self._update_orderbook_level(
-                    price, volume, current_time, is_bid=False
+                    price, volume, current_time, is_bid=side_is_bid
                 )
             elif trade_type == DomType.RESET:
                 # Reset orderbook
@@ -464,6 +555,23 @@ class RealtimeHandler:
 
         except Exception as e:
             self.logger.error(f"Error processing depth entry: {e}")
+
+    def _depth_entry_is_bid(
+        self, entry: dict[str, Any], trade_type: int
+    ) -> bool | None:
+        side = entry.get("side")
+        if isinstance(side, str):
+            normalized_side = side.strip().lower()
+            if normalized_side in {"bid", "bids", "buy"}:
+                return True
+            if normalized_side in {"ask", "asks", "offer", "sell"}:
+                return False
+
+        if trade_type in (DomType.BID, DomType.BEST_BID, DomType.NEW_BEST_BID):
+            return True
+        if trade_type in (DomType.ASK, DomType.BEST_ASK, DomType.NEW_BEST_ASK):
+            return False
+        return None
 
     async def _process_trade(
         self,
@@ -676,7 +784,12 @@ class RealtimeHandler:
                         "timestamp": [timestamp],
                     }
                 )
-                orderbook_df = pl.concat([orderbook_df, new_level], how="vertical")
+                if orderbook_df.height == 0:
+                    orderbook_df = new_level
+                else:
+                    orderbook_df = pl.concat(
+                        [orderbook_df, new_level], how="vertical_relaxed"
+                    )
 
         # Always update the appropriate DataFrame reference
         if is_bid:
