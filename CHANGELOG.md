@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Migration guides will be provided for all breaking changes
 - Semantic versioning (MAJOR.MINOR.PATCH) is strictly followed
 
+## [Unreleased]
+
+### 🐛 Fixed
+
+- **Historical bars schema**: `get_bars` now selects only the canonical
+  `timestamp, open, high, low, close, volume` columns. When the bars API
+  response included extra fields, the returned frame was wider than the
+  six-column bars the realtime data manager constructs, so appending a new
+  realtime bar failed with a Polars width mismatch (`unable to append to a
+  DataFrame of width N with a DataFrame of width 6`) — spamming errors and
+  freezing realtime timeframes.
+
 ## [3.5.8] - 2025-09-02
 
 ### 🐛 Fixed
