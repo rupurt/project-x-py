@@ -554,14 +554,13 @@ class MarketDataMixin:
             )
         )
 
-        # Normalize to the canonical OHLCV schema. The bars API response may
-        # include additional fields; if they survive here, the seeded timeframe
-        # DataFrame is wider than the six-column bars the realtime data manager
-        # constructs, and appending a new bar fails with a Polars width mismatch
-        # ("unable to append to a DataFrame of width N with a DataFrame of
-        # width 6"). Selecting the canonical columns keeps the historical and
-        # realtime schemas identical.
-        data = data.select(["timestamp", "open", "high", "low", "close", "volume"])
+        # Order the canonical OHLCV columns first, but preserve any additional
+        # fields the bars API returns (e.g. trade count) rather than dropping
+        # them. The realtime data manager tolerates the wider historical schema
+        # via diagonal concatenation, so callers keep access to the extra data.
+        canonical = ["timestamp", "open", "high", "low", "close", "volume"]
+        extra = [column for column in data.columns if column not in canonical]
+        data = data.select(canonical + extra)
 
         # Handle datetime conversion robustly
         # Try the simple approach first (fastest for consistent data)

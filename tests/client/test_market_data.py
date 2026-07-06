@@ -280,18 +280,18 @@ class TestMarketData:
                 assert cache_key in client._opt_market_data_cache
 
     @pytest.mark.asyncio
-    async def test_get_bars_drops_extra_api_columns(
+    async def test_get_bars_preserves_extra_api_columns(
         self,
         mock_httpx_client,
         mock_auth_response,
         mock_instrument_response,
         mock_response,
     ):
-        """Extra fields in the bars API response must not widen the frame.
+        """Extra fields in the bars API response are preserved, canonical first.
 
-        The realtime data manager seeds a timeframe from get_bars and then
-        appends six-column realtime bars; any extra columns here cause a Polars
-        width mismatch on append.
+        The realtime data manager tolerates the wider historical schema via
+        diagonal concatenation, so get_bars keeps additional fields instead of
+        dropping them.
         """
         auth_response, accounts_response = mock_auth_response
         now = datetime.datetime.now(pytz.UTC)
@@ -332,7 +332,8 @@ class TestMarketData:
 
                 bars = await client.get_bars("MGC", days=5, interval=5)
 
-                assert bars.columns == [
+                # Canonical OHLCV columns come first, in order...
+                assert bars.columns[:6] == [
                     "timestamp",
                     "open",
                     "high",
@@ -340,6 +341,9 @@ class TestMarketData:
                     "close",
                     "volume",
                 ]
+                # ...and the extra API fields are preserved, not dropped.
+                assert "symbol" in bars.columns
+                assert "n" in bars.columns
 
     @pytest.mark.asyncio
     async def test_get_bars_from_cache(self, mock_httpx_client, mock_auth_response):
