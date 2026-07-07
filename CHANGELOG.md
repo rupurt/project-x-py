@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   width 6`) and froze realtime timeframes. The realtime data manager now
   appends bars with diagonal concatenation, tolerating the wider historical
   schema (extra fields become null on realtime bars).
+- **Realtime data sampling**: single-bar buffer limits no longer make overflow
+  cleanup divide by zero. Sampling now preserves the latest bar when the target
+  size is one.
 
 ### ✨ Added
 
